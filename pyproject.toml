@@ -1,7 +1,66 @@
 [project]
 name = "gxp-llm"
 version = "0.1.0"
-description = "Add your description here"
+description = "Fine-tuned LLM for GxP pharmaceutical compliance: synthetic data, evaluation, QLoRA fine-tuning, quantization, serving, and deployment"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.5.1",
+    "transformers==4.46.3",
+    "trl==0.15.2",
+    "peft==0.13.2",
+    "bitsandbytes==0.45.0",
+    "accelerate==0.34.2",
+    "auto-gptq==0.7.1",
+    "autoawq==0.2.7",
+    "llm-compressor==1.2.0",
+    "vllm==0.6.3",
+    "sglang==0.3.8",
+    "fastapi==0.115.0",
+    "uvicorn==0.30.6",
+    "pydantic==2.9.2",
+    "sentence-transformers==3.1.1",
+    "rouge-score==0.1.2",
+    "nltk==3.9.1",
+    "litellm==1.52.0",
+    "wandb==0.18.1",
+    "locust==2.32.0",
+    "prometheus-client==0.20.0",
+    "python-dotenv==1.0.1",
+    "pyyaml==6.0.1",
+    "tqdm==4.66.5",
+    "numpy==1.26.4",
+    "pandas==2.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.6.0",
+    "pytest==8.3.2",
+    "black==24.8.0",
+    "modal==0.65.0",
+]
+unsloth = [
+    "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+lint.select = ["E", "F", "I", "UP", "B", "C4", "ARG", "PTH", "ERA", "PD", "RUF", "SIM", "TID", "PYI"]
+lint.ignore = ["S101", "ARG001", "ARG002"]
+format.quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["eval*"]

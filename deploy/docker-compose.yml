@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # vLLM serving
+  vllm:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: gxp-vllm
+    environment:
+      - ENGINE_TYPE=vllm
+      - MODEL_PATH=/model
+    volumes:
+      - ./model:/model:ro  # Mount quantized/merged model
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # SGLang serving (alternative)
+  sglang:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: gxp-sglang
+    environment:
+      - ENGINE_TYPE=sglang
+      - MODEL_PATH=/model
+    volumes:
+      - ./model:/model:ro
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    container_name: gxp-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: gxp-grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+
+  # Locust load testing (run manually)
+  locust:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: gxp-locust
+    working_dir: /app/load_test
+    command: locust -f locustfile.py --host=http://vllm:8000 --web-host=0.0.0.0 --web-port=8089
+    ports:
+      - "8089:8089"
+    depends_on:
+      - vllm
+
+volumes:
+  prometheus_data:
+  grafana_data:

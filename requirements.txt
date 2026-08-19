@@ -1,0 +1,47 @@
+# Core ML
+torch==2.5.1
+transformers==4.46.3
+trl==0.15.2
+peft==0.13.2
+bitsandbytes==0.45.0
+accelerate==0.34.2
+
+# Unsloth (install from GitHub for latest)
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+# Quantization
+auto-gptq==0.7.1
+autoawq==0.2.7
+llm-compressor==1.2.0
+
+# Serving
+vllm==0.6.3
+sglang==0.3.8
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.2
+
+# Evaluation
+sentence-transformers==3.1.1
+rouge-score==0.1.2
+nltk==3.9.1
+litellm==1.52.0
+
+# Experiment tracking
+wandb==0.18.1
+
+# Load testing & observability
+locust==2.32.0
+prometheus-client==0.20.0
+
+# Utilities
+python-dotenv==1.0.1
+pyyaml==6.0.1
+tqdm==4.66.5
+numpy==1.26.4
+pandas==2.2.2
+
+# Dev tools
+ruff==0.6.0
+pytest==8.3.2
+black==24.8.0
