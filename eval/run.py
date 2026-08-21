@@ -1,6 +1,7 @@
 """Full evaluation harness orchestrator."""
 import json
 import torch
+from time import perf_counter
 from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
@@ -43,6 +44,9 @@ def load_model(
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
+    # Left padding keeps generated tokens aligned when prompts in a batch have
+    # different lengths.
+    tokenizer.padding_side = "left"
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -63,9 +67,22 @@ def load_model(
 
 
 def generate_response(model, tokenizer, messages: List[Dict], max_new_tokens: int = 512) -> str:
-    """Generate a single response using chat template."""
-    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
+    """Generate one response; retained as a convenient public helper."""
+    return generate_responses(model, tokenizer, [messages], max_new_tokens)[0]
+
+
+def generate_responses(
+    model,
+    tokenizer,
+    message_batches: List[List[Dict]],
+    max_new_tokens: int = 512,
+) -> List[str]:
+    """Generate a padded batch of chat responses in one GPU call."""
+    texts = [
+        tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        for messages in message_batches
+    ]
+    inputs = tokenizer(texts, return_tensors="pt", padding=True).to(model.device)
 
     with torch.no_grad():
         outputs = model.generate(
@@ -77,8 +94,11 @@ def generate_response(model, tokenizer, messages: List[Dict], max_new_tokens: in
             pad_token_id=tokenizer.eos_token_id,
         )
 
-    response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-    return response.strip()
+    prompt_length = inputs.input_ids.shape[1]
+    return [
+        tokenizer.decode(output[prompt_length:], skip_special_tokens=True).strip()
+        for output in outputs
+    ]
 
 
 def load_split(path: str) -> List[Dict]:
@@ -96,19 +116,43 @@ def run_split(
     split_data: List[Dict],
     split_name: str,
     judge_model: Optional[str] = "gemini/gemini-2.5-flash",
+    batch_size: int = 4,
+    max_new_tokens: int = 512,
+    judge_concurrency: int = 2,
 ) -> EvalResult:
-    """Run evaluation on a single split."""
+    """Run evaluation on a single split with batched inference."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    if max_new_tokens < 1:
+        raise ValueError("max_new_tokens must be at least 1")
     predictions = []
     references = []
     categories = []
 
-    for ex in split_data:
-        messages = ex["messages"][:2]  # system + user
-        ref = ex["messages"][2]["content"]
-        pred = generate_response(model, tokenizer, messages)
-        predictions.append(pred)
-        references.append(ref)
-        categories.append(ex.get("category", "unknown"))
+    total_examples = len(split_data)
+    for start in range(0, total_examples, batch_size):
+        batch = split_data[start:start + batch_size]
+        batch_end = start + len(batch)
+        print(
+            f"[{split_name}] Generating {start + 1}-{batch_end}/{total_examples} "
+            f"(batch_size={len(batch)}, max_new_tokens={max_new_tokens})...",
+            flush=True,
+        )
+        started_at = perf_counter()
+        batch_predictions = generate_responses(
+            model,
+            tokenizer,
+            [ex["messages"][:2] for ex in batch],
+            max_new_tokens=max_new_tokens,
+        )
+        elapsed = perf_counter() - started_at
+        print(
+            f"[{split_name}] Generated {start + 1}-{batch_end}/{total_examples} in {elapsed:.1f}s.",
+            flush=True,
+        )
+        predictions.extend(batch_predictions)
+        references.extend(ex["messages"][2]["content"] for ex in batch)
+        categories.extend(ex.get("category", "unknown") for ex in batch)
 
     # Compute metrics per example
     all_metrics = []
@@ -133,7 +177,20 @@ def run_split(
                    "reference": ref,
                    "category": cat} for ex, pred, ref, cat in
                   zip(split_data, predictions, references, categories)]
-    judge_scores = evaluate_with_judge(judge_model, judge_data, DEFAULT_RUBRIC)
+    if judge_model:
+        print(
+            f"[{split_name}] Starting LLM judge for {total_examples} examples "
+            f"using {judge_model}...",
+            flush=True,
+        )
+    else:
+        print(f"[{split_name}] Skipping LLM judge (judge_model=None).", flush=True)
+    judge_scores = evaluate_with_judge(
+        judge_model,
+        judge_data,
+        DEFAULT_RUBRIC,
+        concurrency=judge_concurrency,
+    )
 
     # Adversarial evaluation (if split contains adversarial)
     adv_results = []
@@ -159,8 +216,11 @@ def run_full_eval(
     judge_model: Optional[str] = "gemini/gemini-2.5-flash",
     output_dir: str = "eval_results",
     load_in_4bit: bool = True,
+    batch_size: int = 4,
+    max_new_tokens: int = 512,
+    judge_concurrency: int = 2,
 ) -> Dict[str, EvalResult]:
-    """Run full evaluation on all splits."""
+    """Run full evaluation with configurable generation and judge parallelism."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     model, tokenizer = load_model(model_path, adapter_path, load_in_4bit=load_in_4bit)
@@ -172,9 +232,18 @@ def run_full_eval(
 
     results = {}
     for name, path in splits.items():
-        print(f"\nEvaluating {name}...")
         split_data = load_split(path)
-        result = run_split(model, tokenizer, split_data, name, judge_model)
+        print(f"\nEvaluating {name}: {len(split_data)} examples...", flush=True)
+        result = run_split(
+            model,
+            tokenizer,
+            split_data,
+            name,
+            judge_model,
+            batch_size=batch_size,
+            max_new_tokens=max_new_tokens,
+            judge_concurrency=judge_concurrency,
+        )
         results[name] = result
 
         # Save individual result
@@ -204,6 +273,9 @@ if __name__ == "__main__":
         default="gemini/gemini-2.5-flash",
         help="LiteLLM model name; use 'none' to skip API judging",
     )
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--judge-concurrency", type=int, default=2)
     parser.add_argument("--output-dir", default="eval_results")
     parser.add_argument(
         "--no-load-in-4bit",
@@ -220,4 +292,7 @@ if __name__ == "__main__":
         judge_model,
         args.output_dir,
         load_in_4bit=not args.no_load_in_4bit,
+        batch_size=args.batch_size,
+        max_new_tokens=args.max_new_tokens,
+        judge_concurrency=args.judge_concurrency,
     )

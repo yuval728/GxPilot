@@ -8,6 +8,8 @@ the environment.
 """
 import json
 import litellm
+from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
@@ -85,7 +87,12 @@ class LLMJudge:
         return [self.score(ex["user"], ex["assistant"], ex.get("reference")) for ex in examples]
 
 
-def evaluate_with_judge(model: Optional[str], eval_data: List[Dict], rubric: JudgeRubric = None) -> Dict:
+def evaluate_with_judge(
+    model: Optional[str],
+    eval_data: List[Dict],
+    rubric: JudgeRubric = None,
+    concurrency: int = 2,
+) -> Dict:
     """Run full LLM judge evaluation on a dataset.
 
     ``eval_data`` accepts either the public ``{user, assistant, reference}``
@@ -95,9 +102,13 @@ def evaluate_with_judge(model: Optional[str], eval_data: List[Dict], rubric: Jud
     """
     if not model:
         return {}
+    if concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
     judge = LLMJudge(model=model, rubric=rubric)
-    results = []
-    for ex in eval_data:
+    total_examples = len(eval_data)
+    results = [None] * total_examples
+
+    def score_example(index: int, ex: Dict) -> Dict:
         if "messages" in ex:
             user = ex["messages"][1]["content"]
             assistant = ex["messages"][2]["content"]
@@ -106,10 +117,23 @@ def evaluate_with_judge(model: Optional[str], eval_data: List[Dict], rubric: Jud
             user = ex["user"]
             assistant = ex["assistant"]
             reference = ex.get("reference")
+        print(f"[judge] Scoring {index + 1}/{total_examples}...", flush=True)
+        started_at = perf_counter()
         scores = judge.score(user, assistant, reference)
+        elapsed = perf_counter() - started_at
+        print(f"[judge] Scored {index + 1}/{total_examples} in {elapsed:.1f}s.", flush=True)
         scores["category"] = ex.get("category", "unknown")
         scores["is_adversarial"] = ex.get("is_adversarial", False)
-        results.append(scores)
+        return scores
+
+    print(f"[judge] Using up to {concurrency} concurrent requests.", flush=True)
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {
+            executor.submit(score_example, index, ex): index
+            for index, ex in enumerate(eval_data)
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
     return _aggregate(results)
 
 
