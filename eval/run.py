@@ -55,7 +55,7 @@ def load_model(
         trust_remote_code=True,
         # GPTQ/AWQ checkpoints contain their own quantization configuration;
         # do not layer bitsandbytes NF4 over them.
-        torch_dtype=compute_dtype if not load_in_4bit else None,
+        dtype=compute_dtype if not load_in_4bit else None,
     )
 
     if adapter_path:
