@@ -3,7 +3,7 @@
 A production-grade LLM fine-tuning project covering the full lifecycle: synthetic data generation → evaluation → fine-tuning (QLoRA + Unsloth) → quantization (GPTQ/AWQ/FP8) → serving (vLLM + SGLang) → load testing → deployment.
 
 **Domain:** GxP environmental monitoring (SOPs, deviations, CAPAs, audit trails)
-**Model:** Qwen2.5-7B → QLoRA (4-bit NF4, rank 16)
+**Model candidates:** Qwen 3.5 (2B/4B) and Gemma 4 (E2B/E4B) → QLoRA (4-bit NF4, rank 16)
 **Compute:** Kaggle (training) + Modal (FP8 quant) + Lightning AI (demo)
 
 ---
@@ -12,7 +12,7 @@ A production-grade LLM fine-tuning project covering the full lifecycle: syntheti
 
 | Stage | Metric | Value |
 |-------|--------|-------|
-| **Baseline (Qwen2.5-7B)** | Exact Match | — |
+| **Baseline (candidate model)** | Exact Match | — |
 | **Fine-tuned (QLoRA r=16)** | Exact Match | — |
 | | ROUGE-L F1 | — |
 | | LLM Judge (Accuracy) | — |
@@ -130,15 +130,15 @@ pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 
 ### 2. Run Baseline Evaluation
 ```bash
-# Evaluate base Qwen2.5-7B (4-bit)
-python -m eval.run --model Qwen/Qwen2.5-7B --data-dir data --output-dir eval_results
+# Evaluate a base candidate (4-bit)
+python -m eval.run --model unsloth/Qwen3.5-4B --data-dir data --output-dir eval_results
 ```
 
 ### 3. Fine-Tune on Kaggle
-1. Upload `data/` to Kaggle as dataset `gxp-data`
-2. Open `kaggle/train.ipynb` in Kaggle notebooks
-3. Add `WANDB_API_KEY` to Kaggle Secrets
-4. Run all cells
+1. Upload this repository as versioned Kaggle dataset `gxp-source` and upload `data/` as `gxp-data`
+2. Attach both inputs, enable Internet and a GPU, then run `kaggle/eval.ipynb` for each baseline
+3. Run `kaggle/train.ipynb`; attach its saved notebook output to `kaggle/quantize.ipynb`
+4. Add `WANDB_API_KEY` and one judge-provider secret (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `NVIDIA_API_KEY`) to Kaggle Secrets
 
 ### 4. Quantize
 ```bash
@@ -183,7 +183,7 @@ docker-compose -f deploy/docker-compose.yml up --build
 | **Fine-tuning** | Unsloth + TRL QLoRA (4-bit NF4, rank 16) |
 | **Ablations** | Rank 8 vs 16 vs 32, Unsloth vs vanilla PEFT |
 | **Quantization** | GPTQ, AWQ (Kaggle), FP8 (Modal H100) |
-| **Evaluation** | Exact match, ROUGE-L, BLEU, LLM judge (GPT-4o-mini), adversarial refusal rates |
+| **Evaluation** | Exact match, ROUGE-L, BLEU, provider-configurable LLM judge, adversarial refusal rates |
 | **Serving** | vLLM + SGLang, both with FastAPI OpenAI-compatible API |
 | **Benchmarking** | TTFT p50/p95/p99, inter-token latency, throughput at 1/10/50/100 concurrency |
 | **Load Testing** | Locust with ramp profile (1→10→50→100→1) |
@@ -232,7 +232,7 @@ This project produces:
 ## 🔧 Configuration
 
 Key configs in `kaggle/train.ipynb`:
-- Model: `unsloth/Qwen2.5-7B` (verify on Unsloth supported list)
+- Model: `unsloth/Qwen3.5-4B` (change after baseline comparison)
 - QLoRA: 4-bit NF4, rank 16, alpha 16
 - Target modules: all attention + MLP projections
 - Training: 300 steps, batch 2, grad accum 4, lr 2e-4

@@ -29,10 +29,15 @@ def load_model(
     device_map: str = "auto",
 ):
     """Load model with optional LoRA adapter."""
+    compute_dtype = (
+        torch.bfloat16
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+        else torch.float16
+    )
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=load_in_4bit,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     ) if load_in_4bit else None
 
@@ -44,7 +49,9 @@ def load_model(
         quantization_config=bnb_config,
         device_map=device_map,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if not load_in_4bit else None,
+        # GPTQ/AWQ checkpoints contain their own quantization configuration;
+        # do not layer bitsandbytes NF4 over them.
+        torch_dtype=compute_dtype if not load_in_4bit else None,
     )
 
     if adapter_path:
@@ -88,7 +95,7 @@ def run_split(
     tokenizer,
     split_data: List[Dict],
     split_name: str,
-    judge_model: str = "gpt-4o-mini",
+    judge_model: Optional[str] = "gemini/gemini-2.5-flash",
 ) -> EvalResult:
     """Run evaluation on a single split."""
     predictions = []
@@ -149,13 +156,14 @@ def run_full_eval(
     model_path: str,
     adapter_path: Optional[str] = None,
     data_dir: str = "data",
-    judge_model: str = "gpt-4o-mini",
+    judge_model: Optional[str] = "gemini/gemini-2.5-flash",
     output_dir: str = "eval_results",
+    load_in_4bit: bool = True,
 ) -> Dict[str, EvalResult]:
     """Run full evaluation on all splits."""
-    Path(output_dir).mkdir(exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    model, tokenizer = load_model(model_path, adapter_path)
+    model, tokenizer = load_model(model_path, adapter_path, load_in_4bit=load_in_4bit)
 
     splits = {
         "eval": f"{data_dir}/eval.jsonl",
@@ -188,11 +196,28 @@ def run_full_eval(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen2.5-7B")
+    parser.add_argument("--model", default="unsloth/Qwen3.5-4B")
     parser.add_argument("--adapter", default=None)
     parser.add_argument("--data-dir", default="data")
-    parser.add_argument("--judge-model", default="gpt-4o-mini")
+    parser.add_argument(
+        "--judge-model",
+        default="gemini/gemini-2.5-flash",
+        help="LiteLLM model name; use 'none' to skip API judging",
+    )
     parser.add_argument("--output-dir", default="eval_results")
+    parser.add_argument(
+        "--no-load-in-4bit",
+        action="store_true",
+        help="Use for GPTQ/AWQ checkpoints, which are already quantized",
+    )
     args = parser.parse_args()
 
-    run_full_eval(args.model, args.adapter, args.data_dir, args.judge_model, args.output_dir)
+    judge_model = None if args.judge_model.lower() == "none" else args.judge_model
+    run_full_eval(
+        args.model,
+        args.adapter,
+        args.data_dir,
+        judge_model,
+        args.output_dir,
+        load_in_4bit=not args.no_load_in_4bit,
+    )

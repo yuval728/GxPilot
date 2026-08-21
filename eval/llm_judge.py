@@ -1,4 +1,11 @@
-"""LLM-as-judge evaluation via LiteLLM."""
+"""LLM-as-judge evaluation via LiteLLM.
+
+The model name is intentionally provider-qualified so the harness can use a
+free-tier Gemini, Groq, or NVIDIA NIM endpoint without code changes.  Examples
+include ``gemini/gemini-2.5-flash``, ``groq/openai/gpt-oss-20b`` and
+``nvidia_nim/<catalog-model>``.  LiteLLM reads the corresponding API key from
+the environment.
+"""
 import json
 import litellm
 from typing import Dict, List, Optional
@@ -30,7 +37,7 @@ DEFAULT_RUBRIC = JudgeRubric(
 
 
 class LLMJudge:
-    def __init__(self, model: str = "gpt-4o-mini", rubric: Optional[JudgeRubric] = None):
+    def __init__(self, model: str = "gemini/gemini-2.5-flash", rubric: Optional[JudgeRubric] = None):
         self.model = model
         self.rubric = rubric or DEFAULT_RUBRIC
 
@@ -78,14 +85,28 @@ class LLMJudge:
         return [self.score(ex["user"], ex["assistant"], ex.get("reference")) for ex in examples]
 
 
-def evaluate_with_judge(model: str, eval_data: List[Dict], rubric: JudgeRubric = None) -> Dict:
-    """Run full LLM judge evaluation on a dataset."""
+def evaluate_with_judge(model: Optional[str], eval_data: List[Dict], rubric: JudgeRubric = None) -> Dict:
+    """Run full LLM judge evaluation on a dataset.
+
+    ``eval_data`` accepts either the public ``{user, assistant, reference}``
+    schema or raw chat examples with ``messages``.  Supporting the former fixes
+    the hand-off from :mod:`eval.run` and keeps this function usable on its own.
+    Pass ``None`` as ``model`` to intentionally skip API judging.
+    """
+    if not model:
+        return {}
     judge = LLMJudge(model=model, rubric=rubric)
     results = []
     for ex in eval_data:
-        user = ex["messages"][1]["content"]
-        assistant = ex["messages"][2]["content"]
-        scores = judge.score(user, assistant)
+        if "messages" in ex:
+            user = ex["messages"][1]["content"]
+            assistant = ex["messages"][2]["content"]
+            reference = None
+        else:
+            user = ex["user"]
+            assistant = ex["assistant"]
+            reference = ex.get("reference")
+        scores = judge.score(user, assistant, reference)
         scores["category"] = ex.get("category", "unknown")
         scores["is_adversarial"] = ex.get("is_adversarial", False)
         results.append(scores)
@@ -97,9 +118,11 @@ def _aggregate(results: List[Dict]) -> Dict:
     from collections import defaultdict
     agg = defaultdict(lambda: defaultdict(list))
     for r in results:
-        cat = r.pop("category")
-        adv = r.pop("is_adversarial")
+        cat = r["category"]
+        adv = r["is_adversarial"]
         for k, v in r.items():
+            if k in {"category", "is_adversarial"}:
+                continue
             agg[(cat, adv)][k].append(v)
 
     summary = {}

@@ -39,7 +39,7 @@ The `eval/` package is a **reusable, model-agnostic evaluation framework** built
 ```python
 from eval.llm_judge import LLMJudge, DEFAULT_RUBRIC
 
-judge = LLMJudge(model="gpt-4o-mini", rubric=DEFAULT_RUBRIC)
+judge = LLMJudge(model="gemini/gemini-2.5-flash", rubric=DEFAULT_RUBRIC)
 scores = judge.score(user_msg, assistant_msg, reference_msg)
 # Returns: {"accuracy": 4, "completeness": 5, "compliance": 5, "tone": 4}
 ```
@@ -68,10 +68,10 @@ Classifies responses to adversarial prompts:
 from eval.run import run_full_eval
 
 results = run_full_eval(
-    model_path="Qwen/Qwen2.5-7B",      # or ./merged_16bit, ./gptq-4bit, etc.
+    model_path="unsloth/Qwen3.5-4B",   # or ./merged_16bit, ./gptq-4bit, etc.
     adapter_path="./lora_adapter",     # optional LoRA
     data_dir="data",
-    judge_model="gpt-4o-mini",
+    judge_model="gemini/gemini-2.5-flash",
     output_dir="eval_results"
 )
 ```
@@ -114,7 +114,7 @@ results = run_full_eval(
 ### Local / Kaggle Notebook
 ```bash
 # Baseline (base model)
-python -m eval.run --model Qwen/Qwen2.5-7B --data-dir data --output-dir eval_results
+python -m eval.run --model unsloth/Qwen3.5-4B --data-dir data --output-dir eval_results
 
 # Fine-tuned (merged)
 python -m eval.run --model ./merged_16bit --data-dir data --output-dir eval_results_ft
