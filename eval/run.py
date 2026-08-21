@@ -183,7 +183,7 @@ def run_full_eval(
 
         print(f"  Metrics: {result.metrics}")
         if result.adversarial:
-            print_adversarial_report(eval_adversarial([]).__class__(**result.adversarial))
+            print_adversarial_report(evaluate_adversarial([]).__class__(**result.adversarial))
 
     # Save combined results
     with open(f"{output_dir}/full_results.json", "w") as f:
