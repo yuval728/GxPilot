@@ -8,6 +8,8 @@ the environment.
 """
 import json
 import litellm
+import random
+import time
 from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
@@ -55,6 +57,38 @@ class LLMJudge:
         text = response.choices[0].message.content.strip()
         return self._parse_scores(text)
 
+    def score_with_retry(
+        self,
+        user_msg: str,
+        assistant_msg: str,
+        reference_msg: str = None,
+        max_retries: int = 4,
+        initial_backoff_seconds: float = 5.0,
+        max_backoff_seconds: float = 60.0,
+        label: str = "judge request",
+    ) -> Dict[str, int]:
+        """Score with bounded exponential backoff for transient API failures."""
+        for attempt in range(max_retries + 1):
+            try:
+                return self.score(user_msg, assistant_msg, reference_msg)
+            except Exception as error:
+                if not _is_retryable(error) or attempt == max_retries:
+                    print(
+                        f"[judge] {label} failed after {attempt + 1} attempt(s): {error}",
+                        flush=True,
+                    )
+                    raise
+
+                retry_after = _get_retry_after_seconds(error)
+                backoff = min(max_backoff_seconds, initial_backoff_seconds * (2 ** attempt))
+                delay = retry_after if retry_after is not None else backoff + random.uniform(0, 1)
+                print(
+                    f"[judge] {label} received a retryable error ({_status_summary(error)}). "
+                    f"Retry {attempt + 1}/{max_retries} in {delay:.1f}s.",
+                    flush=True,
+                )
+                time.sleep(delay)
+
     def _build_prompt(self, user_msg: str, assistant_msg: str, reference_msg: str = None) -> str:
         parts = [
             "You are a GxP compliance expert evaluating an AI assistant's response.",
@@ -87,11 +121,39 @@ class LLMJudge:
         return [self.score(ex["user"], ex["assistant"], ex.get("reference")) for ex in examples]
 
 
+def _status_summary(error: Exception) -> str:
+    """Return an API status when LiteLLM exposed one, otherwise the exception type."""
+    status_code = getattr(error, "status_code", None)
+    return str(status_code) if status_code is not None else type(error).__name__
+
+
+def _is_retryable(error: Exception) -> bool:
+    """Retry rate limits, timeouts, connection failures, and server errors only."""
+    status_code = getattr(error, "status_code", None)
+    if status_code is not None:
+        return status_code in {408, 409, 425, 429} or status_code >= 500
+    return type(error).__name__ in {"APIConnectionError", "APITimeoutError", "Timeout"}
+
+
+def _get_retry_after_seconds(error: Exception) -> Optional[float]:
+    """Use a provider Retry-After header when LiteLLM makes one available."""
+    headers = getattr(error, "litellm_response_headers", None) or getattr(error, "headers", None)
+    if not headers:
+        return None
+    try:
+        value = headers.get("retry-after") or headers.get("Retry-After")
+        return max(0.0, float(value)) if value is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def evaluate_with_judge(
     model: Optional[str],
     eval_data: List[Dict],
     rubric: JudgeRubric = None,
     concurrency: int = 2,
+    max_retries: int = 4,
+    initial_backoff_seconds: float = 5.0,
 ) -> Dict:
     """Run full LLM judge evaluation on a dataset.
 
@@ -104,6 +166,10 @@ def evaluate_with_judge(
         return {}
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
+    if max_retries < 0:
+        raise ValueError("max_retries must be non-negative")
+    if initial_backoff_seconds <= 0:
+        raise ValueError("initial_backoff_seconds must be positive")
     judge = LLMJudge(model=model, rubric=rubric)
     total_examples = len(eval_data)
     results = [None] * total_examples
@@ -119,7 +185,14 @@ def evaluate_with_judge(
             reference = ex.get("reference")
         print(f"[judge] Scoring {index + 1}/{total_examples}...", flush=True)
         started_at = perf_counter()
-        scores = judge.score(user, assistant, reference)
+        scores = judge.score_with_retry(
+            user,
+            assistant,
+            reference,
+            max_retries=max_retries,
+            initial_backoff_seconds=initial_backoff_seconds,
+            label=f"request {index + 1}/{total_examples}",
+        )
         elapsed = perf_counter() - started_at
         print(f"[judge] Scored {index + 1}/{total_examples} in {elapsed:.1f}s.", flush=True)
         scores["category"] = ex.get("category", "unknown")

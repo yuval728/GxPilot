@@ -119,6 +119,8 @@ def run_split(
     batch_size: int = 4,
     max_new_tokens: int = 512,
     judge_concurrency: int = 2,
+    judge_max_retries: int = 4,
+    judge_initial_backoff_seconds: float = 5.0,
 ) -> EvalResult:
     """Run evaluation on a single split with batched inference."""
     if batch_size < 1:
@@ -190,6 +192,8 @@ def run_split(
         judge_data,
         DEFAULT_RUBRIC,
         concurrency=judge_concurrency,
+        max_retries=judge_max_retries,
+        initial_backoff_seconds=judge_initial_backoff_seconds,
     )
 
     # Adversarial evaluation (if split contains adversarial)
@@ -219,6 +223,8 @@ def run_full_eval(
     batch_size: int = 4,
     max_new_tokens: int = 512,
     judge_concurrency: int = 2,
+    judge_max_retries: int = 4,
+    judge_initial_backoff_seconds: float = 5.0,
 ) -> Dict[str, EvalResult]:
     """Run full evaluation with configurable generation and judge parallelism."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -243,6 +249,8 @@ def run_full_eval(
             batch_size=batch_size,
             max_new_tokens=max_new_tokens,
             judge_concurrency=judge_concurrency,
+            judge_max_retries=judge_max_retries,
+            judge_initial_backoff_seconds=judge_initial_backoff_seconds,
         )
         results[name] = result
 
@@ -276,6 +284,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--judge-concurrency", type=int, default=2)
+    parser.add_argument("--judge-max-retries", type=int, default=4)
+    parser.add_argument("--judge-initial-backoff-seconds", type=float, default=5.0)
     parser.add_argument("--output-dir", default="eval_results")
     parser.add_argument(
         "--no-load-in-4bit",
@@ -295,4 +305,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         max_new_tokens=args.max_new_tokens,
         judge_concurrency=args.judge_concurrency,
+        judge_max_retries=args.judge_max_retries,
+        judge_initial_backoff_seconds=args.judge_initial_backoff_seconds,
     )
